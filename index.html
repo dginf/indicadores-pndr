@@ -1670,9 +1670,16 @@ function rComparativo(main){
   var nmsE=COMP_EIXOS.map(function(id){return nmC(id);});
   var nmsO=COMP_OBJ.map(function(id){return nmC(id);});
   var temFiltro=temAbrang()||S.rg!=='all'||S.uf!=='all'||S.tip!=='all';
+  var anoComp=S.ano; // usa o ano de análise selecionado
+  var anoCompStr=String(anoComp);
   function valMuns(id,munsArr){
     var sid=String(id);
-    var vals=munsArr.filter(function(m){return m.d[sid]!=null;}).map(function(m){return m.d[sid];});
+    var vals=munsArr.map(function(m){
+      var v=null;
+      if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoCompStr];
+      if(v==null&&anoComp===ANO_MAX) v=m.d[sid];
+      return v;
+    }).filter(function(v){return v!=null;});
     return vals.length?parseFloat((vals.reduce(function(s,v){return s+v;},0)/vals.length).toFixed(4)):null;
   }
   function dsRg(ids){
@@ -1683,21 +1690,21 @@ function rComparativo(main){
         return {label:rg,data:ids.map(function(id){return valMuns(id,mf);}),borderColor:COR[rg]||'#1B4FA8',backgroundColor:(COR[rg]||'#1B4FA8')+'15',borderWidth:2,pointRadius:3};
       });
     }
-    return REGIOES.map(function(rg){return {label:rg,data:ids.map(function(id){var r=DB.serie.find(function(d){return d.mdata_id===id&&d.rg===rg&&d.a===S.fim;});return r?r.v:null;}),borderColor:COR[rg],backgroundColor:COR[rg]+'15',borderWidth:2,pointRadius:3};});
+    return REGIOES.map(function(rg){return {label:rg,data:ids.map(function(id){var r=DB.serie.find(function(d){return d.mdata_id===id&&d.rg===rg&&d.a===anoComp;});return r?r.v:null;}),borderColor:COR[rg],backgroundColor:COR[rg]+'15',borderWidth:2,pointRadius:3};});
   }
   function rkData(){
     var allC=COMP_EIXOS.concat(COMP_OBJ);
     if(temFiltro){var mf=munFilt();return allC.map(function(id){return {nm:nmC(id),avg:valMuns(id,mf)};}).filter(function(d){return d.avg!=null;}).sort(function(a,b){return b.avg-a.avg;});}
-    return allC.map(function(id){var rs=DB.serie.filter(function(d){return d.mdata_id===id&&d.a===S.fim;});return {nm:nmC(id),avg:rs.length?avg(rs.map(function(d){return d.v;})):null};}).filter(function(d){return d.avg!=null;}).sort(function(a,b){return b.avg-a.avg;});
+    return allC.map(function(id){var rs=DB.serie.filter(function(d){return d.mdata_id===id&&d.a===anoComp;});return {nm:nmC(id),avg:rs.length?avg(rs.map(function(d){return d.v;})):null};}).filter(function(d){return d.avg!=null;}).sort(function(a,b){return b.avg-a.avg;});
   }
   var abNote=temFiltro?'<span style="background:#e3edf9;color:var(--pr);border-radius:12px;padding:2px 10px;font-size:10.5px;font-weight:600;margin-left:8px">▼ Filtros ativos</span>':'';
   main.innerHTML=
-    '<div class="tb-top"><div class="tb"><h1>Comparativo Geral'+abNote+'</h1><div class="sub">Todos os índices compostos · '+S.fim+'</div></div>'+
+    '<div class="tb-top"><div class="tb"><h1>Comparativo Geral'+abNote+'</h1><div class="sub">Todos os índices compostos · '+anoComp+'</div></div>'+
 btnDL('Dados','dlComparativo()','dlComparativoXLSX()')+
 '</div>'+
-    '<div class="card"><h2>Radar - Eixos por Região</h2><div class="desc">7 eixos · '+S.fim+'</div><div style="height:340px"><canvas id="cre"></canvas></div></div>'+
-    '<div class="g2"><div class="card"><h2>Radar - Objetivos</h2><div class="desc">4 Objetivos · '+S.fim+'</div><div style="height:260px"><canvas id="cro"></canvas></div></div>'+
-    '<div class="card"><h2>Ranking</h2><div class="desc">Média '+(temFiltro?'do recorte':'nacional')+' · '+S.fim+'</div><div style="height:260px"><canvas id="crk"></canvas></div></div></div>';
+    '<div class="card"><h2>Radar - Eixos por Região</h2><div class="desc">7 eixos · '+anoComp+'</div><div style="height:340px"><canvas id="cre"></canvas></div></div>'+
+    '<div class="g2"><div class="card"><h2>Radar - Objetivos</h2><div class="desc">4 Objetivos · '+anoComp+'</div><div style="height:260px"><canvas id="cro"></canvas></div></div>'+
+    '<div class="card"><h2>Ranking</h2><div class="desc">Média '+(temFiltro?'do recorte':'nacional')+' · '+anoComp+'</div><div style="height:260px"><canvas id="crk"></canvas></div></div></div>';
   var rOpts=function(p){return {responsive:true,maintainAspectRatio:false,plugins:{legend:{position:p,labels:{font:{size:10},boxWidth:8}}},scales:{r:{min:0,max:1,pointLabels:{font:{size:9}},ticks:{stepSize:0.2,font:{size:8}}}}};};
   dc('cre');charts['cre']=new Chart(document.getElementById('cre'),{type:'radar',data:{labels:nmsE,datasets:dsRg(COMP_EIXOS)},options:rOpts('right')});
   dc('cro');charts['cro']=new Chart(document.getElementById('cro'),{type:'radar',data:{labels:nmsO,datasets:dsRg(COMP_OBJ)},options:rOpts('bottom')});
