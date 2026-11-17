@@ -274,6 +274,7 @@ function carregarDados(){
     fetch(BASE+'nr.json').then(function(r){return r.json();}),
     fetch(BASE+'pnad.json').then(function(r){return r.json();}),
     fetch(BASE+'geo.json').then(function(r){return r.json();}),
+    fetch(BASE+'det_serie_comp.json').then(function(r){return r.json();}),
   ];
 
   Promise.all(fetches).then(function(results){
@@ -286,6 +287,8 @@ function carregarDados(){
     var geo=results[6];
     PATHS=geo.paths;
     MUN_XY=geo.xy;
+    MDET_COMP=results[7];
+    _detCompCarregado=true;
     if(loading) loading.style.display='none';
     
     META={};
@@ -921,7 +924,7 @@ function dlMunicipal(){
     );
     rows.push(linha);
   });
-  downloadCSV('PNDR_Municipal_2024.csv', rows);
+  downloadCSV('PNDR_Municipal_'+ANO_MAX+'.csv', rows);
 }
 function dlMunicipalXLSX(){
   var compostos=COMP_OBJ.concat(COMP_EIXOS);
@@ -932,7 +935,7 @@ function dlMunicipalXLSX(){
     rows.push([m.n,m.u,m.tp,m.i].concat(
       compostos.map(function(id){var v=m.d[String(id)];return v!=null?v:null;})));
   });
-  downloadXLSX('PNDR_Municipal_2024.xlsx',rows,'Municípios');
+  downloadXLSX('PNDR_Municipal_'+ANO_MAX+'.xlsx',rows,'Municípios');
 }
 
 function dlMunicipioSelecionado(fmt){
@@ -1444,7 +1447,7 @@ function rTipologia(main){
   }).join('');
   var abNote=temAbrang()?'<span style="background:#e3edf9;color:var(--pr);border-radius:12px;padding:2px 10px;font-size:10.5px;font-weight:600;margin-left:8px">▼ Abrangência ativa</span>':'';
   main.innerHTML=
-    '<div class="tb-top"><div class="tb"><h1>Por Tipologia PNDR'+abNote+'</h1><div class="sub">2024'+(temAbrang()?' · abrangência ativa':'')+'</div></div>'+
+    '<div class="tb-top"><div class="tb"><h1>Por Tipologia PNDR'+abNote+'</h1><div class="sub">'+ANO_MAX+(temAbrang()?' · abrangência ativa':'')+'</div></div>'+
     btnDL('Dados','dlTipologia()','dlTipologiaXLSX()')+
     '</div>'+
     '<div class="card" style="padding:12px 16px 8px"><div class="desc" style="margin-bottom:6px">Selecione o indicador</div>'+
@@ -1500,19 +1503,31 @@ function rMunicipio(main){
 function _renderMunicipio(main){
   var mSel=S.munSel?MUNS.find(function(m){return m.i===S.munSel;}):null;
   if(!mSel){
+    var anoTabStr=String(S.ano);
+    function getCompVal(m,sid){
+      // usa MDET_COMP se carregado (suporta qualquer ano), fallback para m.d (ANO_MAX)
+      if(Object.keys(MDET_COMP).length>0){
+        var v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoTabStr];
+        if(v!=null) return v;
+      }
+      // fallback: m.d só tem ANO_MAX
+      if(S.ano===ANO_MAX) return m.d[sid];
+      return null;
+    }
     var tabRows=munFilt().filter(function(m){return !S.munBusca||m.n.toLowerCase().indexOf(S.munBusca)>=0;}).slice(0,40).map(function(m){
+      var v62=getCompVal(m,'62'),v63=getCompVal(m,'63'),v5=getCompVal(m,'5'),v25=getCompVal(m,'25'),v20=getCompVal(m,'20');
       return '<tr style="cursor:pointer" onclick="S.munSel='+m.i+';renderML();render()"><td><b>'+m.n+'</b></td><td>'+m.u+'</td><td style="font-size:10.5px">'+m.tp+'</td>'
-        +'<td>'+(m.d['62']!=null?m.d['62'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['63']!=null?m.d['63'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['5']!=null?m.d['5'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['25']!=null?m.d['25'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['20']!=null?m.d['20'].toFixed(3):'-')+'</td></tr>';
+        +'<td>'+(v62!=null?v62.toFixed(3):'-')+'</td>'
+        +'<td>'+(v63!=null?v63.toFixed(3):'-')+'</td>'
+        +'<td>'+(v5!=null?v5.toFixed(3):'-')+'</td>'
+        +'<td>'+(v25!=null?v25.toFixed(3):'-')+'</td>'
+        +'<td>'+(v20!=null?v20.toFixed(3):'-')+'</td></tr>';
     }).join('');
     main.innerHTML=
       '<div class="tb-top"><div class="tb"><h1>Análise Municipal</h1>'
-      +'<div class="sub">Índices compostos · 2024 · '+MUNS.length+' municípios</div></div>'
+      +'<div class="sub">Índices compostos · '+S.ano+' · '+MUNS.length+' municípios</div></div>'
       +btnDL('Dados','dlMunicipal()','dlMunicipalXLSX()')+'</div>'
-      +'<div class="card"><h2>Municípios no recorte · compostos 2024</h2>'
+      +'<div class="card"><h2>Municípios no recorte · compostos '+S.ano+'</h2>'
       +'<div class="desc">Clique numa linha para ver o detalhe</div>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Município</th><th>UF</th><th>Tipologia</th>'
       +'<th>Obj.1</th><th>Obj.2</th><th>Educação</th><th>Des.Social</th><th>Infraestrutura</th></tr></thead>'
