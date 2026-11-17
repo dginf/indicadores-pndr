@@ -334,7 +334,7 @@ var EIXO_GRUPOS = [[11,12,13,14,15],[6,7,8,9,10],[1,2,3,4,5],[16,17,18,19,20],[2
 
 var META = {};
 var ANOS = [];
-var ANO_MIN=2013,ANO_MAX=2024;
+var ANO_MIN=2013,ANO_MAX=2025;
 
 var S={view:'principal',rg:'all',uf:'all',tip:'all',ab:{sd:'all',sm:'all',az:'all',ff:'all',mt:'all',aa:'all',ro:'all',su:'all',ci:'all',pisf:'all',marajobailique:'all',jeq:'all',xingu:'all',br319:'all'},ind:62,ano:ANO_MAX,ini:ANO_MIN,fim:ANO_MAX,munSel:null,munBusca:''};
 var charts={};
@@ -1475,13 +1475,15 @@ function rMunicipio(main){
     if(loading) loading.style.display='flex';
     Promise.all([
       fetch('dados/det_serie_1.json').then(function(r){return r.json();}),
-      fetch('dados/det_serie_2.json').then(function(r){return r.json();})
+      fetch('dados/det_serie_2.json').then(function(r){return r.json();}),
+      fetch('dados/det_serie_3.json').then(function(r){return r.json();})
     ]).then(function(parts){
-      
+
       MDET_SERIE={};
       var k;
       for(k in parts[0]) MDET_SERIE[k]=parts[0][k];
       for(k in parts[1]) MDET_SERIE[k]=parts[1][k];
+      for(k in parts[2]) MDET_SERIE[k]=parts[2][k];
       if(loading) loading.style.display='none';
       rMunicipio(main);
     }).catch(function(err){
