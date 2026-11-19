@@ -6,6 +6,8 @@
 <title>Painel PNDR — SDR/MIDR</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
 :root{
@@ -274,6 +276,7 @@ function carregarDados(){
     fetch(BASE+'nr.json').then(function(r){return r.json();}),
     fetch(BASE+'pnad.json').then(function(r){return r.json();}),
     fetch(BASE+'geo.json').then(function(r){return r.json();}),
+    fetch(BASE+'det_serie_comp.json').then(function(r){return r.json();}),
   ];
 
   Promise.all(fetches).then(function(results){
@@ -286,6 +289,8 @@ function carregarDados(){
     var geo=results[6];
     PATHS=geo.paths;
     MUN_XY=geo.xy;
+    MDET_COMP=results[7];
+    _detCompCarregado=true;
     if(loading) loading.style.display='none';
     
     META={};
@@ -822,7 +827,857 @@ function btnDL(label, fnCSV, fnXLSX){
   return '<div style="display:flex;gap:6px;flex-shrink:0">'
     +'<button class="btn-dl" onclick="'+fnCSV+'">⬇ CSV</button>'
     +(hasXLSX ? '<button class="btn-dl" onclick="'+fnXLSX+'">⬇ XLSX</button>' : '')
+    +'<button class="btn-dl" style="background:#c62828;border-color:#c62828;color:#fff" onclick="gerarPDF()">⬇ PDF</button>'
     +'</div>';
+}
+
+// ── PDF ──────────────────────────────────────────────────────────────────────
+function gerarPDF(){
+  if(typeof jspdf === 'undefined' || !jspdf.jsPDF){
+    alert('Biblioteca PDF não carregada. Verifique sua conexão e tente novamente.');
+    return;
+  }
+  var doc = new jspdf.jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+  var W = doc.internal.pageSize.getWidth();
+  var margin = 14;
+  var y = 18;
+
+  // ── Metadados dos indicadores (fonte: tabela mdata do banco) ──
+  var META = {
+    // Eixo III – Educação (painel: Eixo III = subs 1-4, composto id=5)
+    1:{nm:'Percentual de escolas com acesso a esgotamento sanitário',desc:'Número de estabelecimentos com acesso à rede de esgoto ou fossa séptica / total de estabelecimentos de educação básica'},
+    2:{nm:'Percentual de escolas com acesso à internet',desc:'Número de estabelecimentos com acesso à internet / total de estabelecimentos de educação básica'},
+    3:{nm:'Indicador de Adequação da Formação Docente',desc:'Proporção de docentes no ensino médio com formação superior de licenciatura na mesma disciplina que leciona, ou bacharelado com complementação pedagógica'},
+    4:{nm:'Índice de Desenvolvimento da Educação Básica (IDEB)',desc:'Índice de Desenvolvimento da Educação Básica – média harmônica do fluxo escolar e das médias de desempenho nas avaliações do SAEB'},
+    5:{nm:'Índice Composto de Educação e Capacitação Profissional',desc:'Média normalizada (0-1) dos quatro sub-indicadores de educação'},
+    // Eixo II – C&T e Inovação (subs 6-9, composto id=10)
+    6:{nm:'Número de MPE em biotecnologia e atividades C&T',desc:'Número de micro e pequenas empresas (1 a 49 empregados) ativas em atividades de biotecnologia e C&T (CNAE 72)'},
+    7:{nm:'Número de empregos em desenvolvimento científico',desc:'Número de vínculos ativos em 31/12 registrados no RAIS em atividades de pesquisa e desenvolvimento científico (CNAE 7210-7219)'},
+    8:{nm:'Número de empregos em estabelecimentos C&T',desc:'Número de empregos em estabelecimentos registrados em atividades de C&T e ensino superior (CNAE 72 + 85)'},
+    9:{nm:'Número de depósitos de patentes por 100 mil hab.',desc:'Número de pedidos de patentes do tipo Patente de Invenção e Modelo de Utilidade depositados no INPI / população × 100.000'},
+    10:{nm:'Índice Composto de Ciência, Tecnologia e Inovação',desc:'Média normalizada (0-1) dos quatro sub-indicadores de C&T e inovação'},
+    // Eixo I – Desenvolvimento Produtivo (subs 11-14, composto id=15)
+    11:{nm:'Índice de Complexidade Econômica',desc:'Índice de Complexidade das Localidades – Emprego (ICLe): mede a diversidade e sofisticação das atividades econômicas formais do município a partir da estrutura de emprego'},
+    12:{nm:'Participação do setor industrial no emprego formal',desc:'Número de trabalhadores formais empregados na indústria / total de trabalhadores formais do município × 100'},
+    13:{nm:'Salário médio no mercado formal',desc:'Massa salarial municipal / total de trabalhadores formais com vínculo ativo em 31/12 (RAIS)'},
+    14:{nm:'Escala produtiva',desc:'Massa salarial municipal dividida pelo número de estabelecimentos ativos (RAIS) – proxy do porte médio dos estabelecimentos'},
+    15:{nm:'Índice Composto de Desenvolvimento Produtivo',desc:'Média normalizada (0-1) dos quatro sub-indicadores de desenvolvimento produtivo'},
+    // Eixo IV – Infraestrutura (subs 16-19, composto id=20)
+    16:{nm:'Índice de Atendimento Urbano de Água (IN023)',desc:'População urbana atendida com abastecimento de água / população urbana total × 100 (SNIS)'},
+    17:{nm:'Percentual de Acessos de Internet de Alta Velocidade',desc:'Soma dos acessos a internet de alta velocidade (acima de 34 Mbps) / total de acessos fixos do município × 100 (ANATEL)'},
+    18:{nm:'Internações Hospitalares por Doenças Relacionadas ao Saneamento Ambiental (DRSAI)',desc:'Somatório das internações pelas CIDs: doenças infecciosas intestinais, hepatite A, leptospirose, dengue e malária / população × 10.000 (DATASUS)'},
+    19:{nm:'Despesas em habitação e recuperação urbana per capita',desc:'Valor das despesas nominais pagas nas subfunções de habitação e recuperação urbana / população residente (SICONFI/STN)'},
+    20:{nm:'Índice Composto de Infraestrutura',desc:'Média normalizada (0-1) dos quatro sub-indicadores de infraestrutura'},
+    // Eixo V – Desenvolvimento Social (subs 21-24, composto id=25)
+    21:{nm:'Desnutrição',desc:'Internações por desnutrição (CID E40-E46) em residentes / população × 10.000 (DATASUS/SIH)'},
+    22:{nm:'Percentual de Pessoas de Baixa Renda no CadÚnico',desc:'Pessoas inscritas no Cadastro Único com renda per capita familiar de até meio salário mínimo / população municipal × 100'},
+    23:{nm:'Distorção Idade-Série',desc:'Porcentagem dos alunos matriculados que têm idade superior à esperada para a série/ano em que estão matriculados (INEP/Educacenso)'},
+    24:{nm:'Diferencial Salarial Médio Feminino no Mercado Formal',desc:'(Massa salarial municipal feminina / total de trabalhadoras formais) / (massa salarial municipal masculina / total de trabalhadores formais) × 100'},
+    25:{nm:'Índice Composto de Desenvolvimento Social',desc:'Média normalizada (0-1) dos quatro sub-indicadores de desenvolvimento social'},
+    // Eixo VII – Meio Ambiente (subs 26-29, composto id=30)
+    26:{nm:'Empregos em Estabelecimentos de Reciclagem',desc:'Número de empregos em estabelecimentos registrados nas atividades de coleta e tratamento de resíduos (CNAE 38) no RAIS'},
+    27:{nm:'Percentual de Área Desmatada no Município',desc:'Área desmatada acumulada no município / área total do município × 100 (PRODES/INPE)'},
+    28:{nm:'Taxa de Desmatamento (km²/ano)',desc:'Área desmatada no ano de análise menos a área desmatada no ano anterior (PRODES/INPE)'},
+    29:{nm:'Emissões Líquidas de GEE (CO₂eq)',desc:'Emissões de gases de efeito estufa menos as remoções de GEE no município (tCO₂eq) – SEEG/OC'},
+    30:{nm:'Índice Composto de Sustentabilidade',desc:'Média normalizada (0-1) dos quatro sub-indicadores de sustentabilidade'},
+    // Eixo VI – Capacidades Governativas (subs 31-34, composto id=35)
+    31:{nm:'Percentual de dirigentes municipais com ensino superior completo',desc:'Número total de Dirigentes da Administração Pública Municipal com ensino superior completo / total de dirigentes × 100 (RAIS)'},
+    32:{nm:'Percentual de servidores municipais com ensino superior completo',desc:'Número total de empregados da Administração Pública Municipal com ensino superior completo / total de servidores × 100 (RAIS)'},
+    33:{nm:'Salário médio de servidores da administração pública municipal',desc:'Massa salarial da Administração Pública Municipal / total de servidores com vínculo ativo em 31/12 (RAIS)'},
+    34:{nm:'Índice de Sustentabilidade Fiscal dos Municípios',desc:'Razão entre receitas de arrecadação própria (IPTU, ISS, ITBI, taxas) e transferências constitucionais recebidas (SICONFI/STN)'},
+    35:{nm:'Índice Composto de Fortalecimento das Capacidades Governativas',desc:'Média normalizada (0-1) dos quatro sub-indicadores de capacidades governativas'},
+    // Objetivos (subs 43-54, compostos 62-65)
+    43:{nm:'Diferencial entre Salário Médio e Mediana Nacional',desc:'(Massa salarial municipal / total de trabalhadores formais) / mediana nacional do salário formal × 100 – mede convergência de renda'},
+    44:{nm:'Diferencial entre IDEB e Mediana Nacional',desc:'(Índice IDEB do município) / mediana nacional do IDEB × 100 – mede convergência educacional'},
+    45:{nm:'Diferencial entre Médicos por Habitante e Mediana Nacional',desc:'Número de médicos por 10.000 hab. (TABNET/CNES) do município / mediana nacional × 100 – mede convergência de serviços de saúde'},
+    46:{nm:'Índice de Centralidade',desc:'ICi = -Σ (Esi/Ei) × Rs × ln(Esi/Ei) – mede a diversidade e raridade dos serviços oferecidos pelo município em relação à região'},
+    47:{nm:'Razão de Primazia Populacional Estadual',desc:'População do município / população do município mais populoso do estado × 100 – mede a concentração populacional no estado'},
+    48:{nm:'Razão de Primazia Econômica Estadual',desc:'Massa salarial municipal / massa salarial do município de maior massa no estado × 100 – mede a concentração econômica estadual'},
+    49:{nm:'Percentual de vínculos formais com ensino superior completo',desc:'Número de vínculos ativos em 31/12 ocupados por trabalhadores com ensino superior completo / total de vínculos ativos × 100 (RAIS)'},
+    50:{nm:'Salário Médio no Mercado Formal (Objetivo 3)',desc:'Massa salarial municipal / total de trabalhadores formais com vínculo ativo em 31/12 (RAIS)'},
+    51:{nm:'Taxa de Variação Populacional',desc:'(Estimativa de população do ano corrente - estimativa do ano anterior) / estimativa do ano anterior × 100 (IBGE)'},
+    52:{nm:'Índice de Especialização do Emprego em Agricultura',desc:'Quociente Locacional do setor agrícola considerando empregos formais: (emprego agrícola municipal / emprego total municipal) / (emprego agrícola nacional / emprego total nacional)'},
+    53:{nm:'Índice de Especialização do Emprego em Mineração',desc:'Quociente Locacional do setor de mineração considerando empregos formais (mesmo método do QL agrícola)'},
+    54:{nm:'Coeficiente de Diversificação Econômica',desc:'1 – [(número de trabalhadores no setor s / total de trabalhadores do município) / (número de trabalhadores no setor s / total de trabalhadores do Brasil)] × 100'},
+    62:{nm:'Indicador Composto – Objetivo 1 (Convergência de Renda)',desc:'Média normalizada dos três sub-indicadores do Objetivo 1'},
+    63:{nm:'Indicador Composto – Objetivo 2 (Cidades Intermediadoras)',desc:'Média normalizada dos três sub-indicadores do Objetivo 2'},
+    64:{nm:'Indicador Composto – Objetivo 3 (Competitividade)',desc:'Média normalizada dos três sub-indicadores do Objetivo 3'},
+    65:{nm:'Indicador Composto – Objetivo 4 (Diversificação)',desc:'Média normalizada dos três sub-indicadores do Objetivo 4'},
+    // PNAD Contínua
+    'pnad1':{nm:'Média de Anos de Estudo da População',desc:'Média de anos de estudo da população com 25 anos ou mais de idade (PNAD Contínua/IBGE)'},
+    'pnad2':{nm:'Proporção de Pessoas de 14+ Anos Ocupadas em Trabalho Informal',desc:'Proporção de pessoas de 14 anos ou mais de idade ocupadas em trabalho informal / total de ocupados × 100 (PNAD Contínua/IBGE)'},
+    'pnad3':{nm:'Taxa de Desocupação',desc:'Pessoas desocupadas na semana de referência / (ocupadas + desocupadas) × 100 – população economicamente ativa (PNAD Contínua/IBGE)'},
+    'pnad4':{nm:'Percentual de Pessoas em Domicílios com Coleta de Lixo',desc:'Percentual de pessoas vivendo em domicílios particulares permanentes com serviço de coleta de lixo direta ou indireta (PNAD Contínua/IBGE)'},
+    'pnad5':{nm:'Rendimento Mensal Efetivo de Todos os Trabalhos',desc:'Rendimento mensal efetivo médio de todos os trabalhos das pessoas de 14 anos ou mais com rendimento (PNAD Contínua/IBGE)'},
+    'pnad6':{nm:'Percentual de Pessoas em Domicílios com Abastecimento de Água por Rede',desc:'Percentual de pessoas vivendo em domicílios com abastecimento de água proveniente de rede geral (PNAD Contínua/IBGE)'},
+    'pnad7':{nm:'Média de Anos de Estudo das Pessoas Empregadas',desc:'Média de anos de estudo das pessoas de 14 anos ou mais de idade empregadas no setor formal (PNAD Contínua/IBGE)'}
+  };
+
+  // Helper: imprime ficha metodológica (tabela Indicador | Descrição)
+  function addFicha(ids, titulo){
+    var rows = ids.map(function(id){
+      var m = META[id];
+      if(!m) return null;
+      return [pdfSafe(m.nm), pdfSafe(m.desc)];
+    }).filter(Boolean);
+    if(!rows.length) return;
+
+    var curY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 10 : y + 10;
+    if(curY + 20 > doc.internal.pageSize.getHeight() - 15){ doc.addPage(); curY = 18; }
+
+    doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+    doc.text(pdfSafe(titulo), margin, curY);
+    curY += 4;
+
+    doc.autoTable({
+      startY: curY,
+      head: [['Indicador','Descrição do cálculo']],
+      body: rows,
+      margin: {left: margin, right: margin},
+      styles: {fontSize: 7, cellPadding: 2},
+      headStyles: {fillColor:[21,101,192], textColor:255, fontStyle:'bold'},
+      columnStyles: {0:{cellWidth:65, fontStyle:'bold'}, 1:{cellWidth:'auto'}},
+      alternateRowStyles: {fillColor:[245,247,250]},
+      didDrawPage: function(){
+        doc.setFontSize(7); doc.setTextColor(150);
+        doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+          W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+      }
+    });
+  }
+
+  // ── Cabeçalho ──
+  doc.setFillColor(21, 101, 192);
+  doc.rect(0, 0, W, 26, 'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(14);
+  doc.setFont('helvetica','bold');
+  doc.text('Painel de Indicadores da PNDR', margin, 11);
+  doc.setFontSize(8);
+  doc.setFont('helvetica','normal');
+  doc.text('SDR / DGINF - Ministerio da Integracao e do Desenvolvimento Regional', margin, 17);
+  var dataHoje = new Date().toLocaleDateString('pt-BR');
+  doc.text('Gerado em: '+dataHoje, W - margin, 17, {align:'right'});
+  y = 34;
+
+  // ── Nome da aba atual ──
+  var munDetSel = (S.view==='municipio' && S.munSel) ? MUNS.find(function(m){return m.i===S.munSel;}) : null;
+  var nomeAba = munDetSel
+    ? 'Analise Municipal - '+munDetSel.n+' ('+munDetSel.u+')'
+    : ({
+        'principal':'Principal',
+        'evolucao_obj':'Evolução dos Objetivos',
+        'evolucao_eixo':'Evolução dos Eixos',
+        'tipologia':'Por Tipologia PNDR',
+        'municipio':'Análise Municipal',
+        'comparativo':'Comparativo Geral',
+        'pnad':'PNAD Contínua'
+      }[S.view] || S.view);
+
+  // ── Nome da aba + destaque de filtro especial (abrangência ou município) ──
+  doc.setTextColor(21, 101, 192);
+  doc.setFontSize(13);
+  doc.setFont('helvetica','bold');
+  doc.text(nomeAba, margin, y);
+  y += 7;
+
+  // Filtros: coleta primeiro para saber se há abrangência
+  var abNomes = {sd:'SUDENE',sm:'Semiárido',az:'Amazônia Legal',ff:'Faixa de Fronteira',
+    pisf:'PISF',marajobailique:'Marajó e Bailique',jeq:'Vale do Jequitinhonha',
+    xingu:'Xingu',br319:'BR-319'};
+  var abFlags = [];
+  for(var k in S.ab){ if(S.ab[k]==='1'||S.ab[k]==='Sim'||S.ab[k]===true) abFlags.push(abNomes[k]||k); }
+
+  // Destaque em badge azul para abrangência (Evolução/Eixos) e UF/Região (quando filtrado)
+  var badgeTxt = '';
+  if(abFlags.length) badgeTxt = abFlags.join(' + ');
+  else if(S.uf !== 'all') badgeTxt = S.uf;
+  else if(S.rg !== 'all') badgeTxt = S.rg;
+  if(badgeTxt && (S.view==='evolucao_obj'||S.view==='evolucao_eixo'||S.view==='comparativo')){
+    doc.setFillColor(21,101,192);
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(10);
+    doc.setFont('helvetica','bold');
+    var bw = doc.getTextWidth(badgeTxt)+8;
+    doc.roundedRect(margin, y-5, bw, 7, 1.5, 1.5, 'F');
+    doc.text(badgeTxt, margin+4, y);
+    y += 5;
+  }
+
+  // Linha de metadados (filtros secundários)
+  doc.setTextColor(100,100,100);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica','normal');
+  var filtrosTxt = [];
+  filtrosTxt.push('Ano de análise: '+S.ano);
+  filtrosTxt.push('Período: '+S.ini+'-'+S.fim);
+  if(S.rg !== 'all' && !badgeTxt.includes(S.rg)) filtrosTxt.push('Região: '+S.rg);
+  if(S.uf !== 'all' && !badgeTxt.includes(S.uf)) filtrosTxt.push('Estado: '+S.uf);
+  if(S.tip !== 'all') filtrosTxt.push('Tipologia: '+S.tip);
+  if(abFlags.length && !badgeTxt) filtrosTxt.push('Abrangência: '+abFlags.join(', '));
+  doc.text(filtrosTxt.join('  |  '), margin, y, {maxWidth: W - margin*2});
+  y += 4;
+
+  // Linha separadora
+  doc.setDrawColor(220,220,220);
+  doc.line(margin, y, W - margin, y);
+  y += 5;
+
+  // Sanitiza caracteres Unicode não suportados pelo jsPDF/Helvetica
+  function pdfSafe(str){
+    if(!str) return '';
+    return str
+      .replace(/—/g, ' - ')  // em dash —
+      .replace(/–/g, '-')    // en dash –
+      .replace(/…/g, '...')  // ellipsis …
+      .replace(/→/g, '->')   // seta →
+      .replace(/·/g, '·')    // middle dot (já ASCII-safe)
+      .replace(/[^\x00-\xFF]/g, '?'); // qualquer outro não-latin1
+  }
+
+  // ── Indicador selecionado (destaque para abas de evolução e comparativo) ──
+  if((S.view==='evolucao_obj'||S.view==='evolucao_eixo'||S.view==='comparativo') && S.ind){
+    var COMP_IDS_PDF = [5,10,15,20,25,30,35,62,63,64,65];
+    var tipoInd = COMP_IDS_PDF.indexOf(S.ind) >= 0 ? 'Índice composto' : 'Sub-indicador';
+    // Valor médio do indicador no recorte
+    var mfInd = munFilt();
+    var anoIndStr = String(S.ano);
+    var valsInd = mfInd.map(function(m){
+      var v = null;
+      var sid = String(S.ind);
+      if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoIndStr];
+      if(v==null && S.ano===ANO_MAX) v=(m.d[sid]!=null?m.d[sid]:null);
+      // sub-indicador: busca em MDET
+      if(v==null){ var dm=MDET[String(m.i)]||{}; v=dm[sid]!=null?dm[sid]:null; }
+      return v;
+    }).filter(function(v){return v!=null;});
+    var mediaInd = valsInd.length ? avg(valsInd) : null;
+    // Nome completo sem truncamento: usa nmInd() diretamente
+    var nmIndFull = pdfSafe(nmInd(S.ind).replace('Índice Composto de ','').replace('Índice Composto ','').replace('Indicador Composto do ','').trim());
+
+    // Badge cinza-escuro com rótulo "Indicador selecionado"
+    doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(120,120,120);
+    doc.text('Indicador selecionado  |  '+tipoInd, margin, y);
+    y += 4;
+    doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+    var indLinha = nmIndFull + (mediaInd!==null ? '   ->   media do recorte: '+mediaInd.toFixed(3) : '');
+    doc.text(indLinha, margin, y, {maxWidth: W-margin*2});
+    y += 6;
+    doc.setDrawColor(220,220,220);
+    doc.line(margin, y, W - margin, y);
+    y += 4;
+  }
+
+  // ── Bloco descritivo por aba ──
+  var mfDesc = munFilt();
+  var nDesc = mfDesc.length;
+  var anoSDesc = String(S.ano);
+
+  if(munDetSel){
+    // ── Detalhe de município: ficha com mini-tabela de índices ──
+    var detMun = MDET[String(munDetSel.i)]||{};
+
+    // Linha de identificação
+    doc.setTextColor(40,40,40);
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica','bold');
+    doc.text(munDetSel.n+' - '+munDetSel.u+' - Região '+munDetSel.rg, margin, y);
+    y += 4.5;
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(8);
+    doc.text('Tipologia PNDR: '+munDetSel.tp, margin, y);
+    y += 5;
+
+    // Mini-tabela: 2 colunas lado a lado (Eixos | Objetivos)
+    var eixosDef = [
+      {id:5,  nm:'Educação e Cap. Profissional'},
+      {id:10, nm:'Ciência, Tecnologia e Inovação'},
+      {id:15, nm:'Desenvolvimento Produtivo'},
+      {id:20, nm:'Infraestrutura'},
+      {id:25, nm:'Desenvolvimento Social'},
+      {id:30, nm:'Sustentabilidade'},
+      {id:35, nm:'Fortalecimento das Capacidades Governativas'}
+    ];
+    var objsDef = [
+      {id:62, nm:'Objetivo 1 - Redução das Desigualdades'},
+      {id:63, nm:'Objetivo 2 - Competitividade'},
+      {id:64, nm:'Objetivo 3 - Sustentabilidade'},
+      {id:65, nm:'Objetivo 4 - Coesão Territorial'}
+    ];
+    function getValMun(id){
+      var v=null;
+      var sid=String(id);
+      if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(munDetSel.i)]||{})[sid]||{})[anoSDesc];
+      if(v==null && S.ano===ANO_MAX) v=(detMun[sid]!=null?detMun[sid]:null);
+      return v!=null ? parseFloat(v).toFixed(3) : 'n/d';
+    }
+
+    var colW = (W-margin*2)/2 - 3;
+    var xL = margin, xR = margin + colW + 6;
+
+    // Cabeçalhos das duas colunas
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica','bold');
+    doc.setTextColor(21,101,192);
+    doc.text('Eixos Estrategicos - '+S.ano, xL, y);
+    doc.text('Objetivos PNDR - '+S.ano, xR, y);
+    y += 4;
+
+    var rowH = 4.2;
+    var maxRows = Math.max(eixosDef.length, objsDef.length);
+    for(var ri=0; ri<maxRows; ri++){
+      var rowY = y + ri*rowH;
+      if(ri%2===0){ doc.setFillColor(245,247,252); doc.rect(xL, rowY-3, colW, rowH, 'F'); doc.rect(xR, rowY-3, colW, rowH, 'F'); }
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(7);
+      doc.setTextColor(40,40,40);
+      if(eixosDef[ri]){
+        doc.text(eixosDef[ri].nm, xL+2, rowY);
+        doc.setFont('helvetica','bold');
+        doc.text(getValMun(eixosDef[ri].id), xL+colW-8, rowY, {align:'right'});
+        doc.setFont('helvetica','normal');
+      }
+      if(objsDef[ri]){
+        doc.text(objsDef[ri].nm, xR+2, rowY);
+        doc.setFont('helvetica','bold');
+        doc.text(getValMun(objsDef[ri].id), xR+colW-8, rowY, {align:'right'});
+        doc.setFont('helvetica','normal');
+      }
+    }
+    y += maxRows*rowH + 5;
+
+  } else if(S.view === 'evolucao_obj' || S.view === 'evolucao_eixo'){
+    var isObj2 = S.view === 'evolucao_obj';
+    var ids2 = isObj2 ? COMP_OBJ : COMP_EIXOS;
+    var temFiltroEv = abFlags.length>0||S.rg!=='all'||S.uf!=='all'||S.tip!=='all';
+    var valsEv = ids2.map(function(id){
+      var sid=String(id);
+      if(temFiltroEv && mfDesc.length>0){
+        var vs=mfDesc.map(function(m){
+          var v=null;
+          if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoSDesc];
+          if(v==null&&S.ano===ANO_MAX) v=m.d[sid];
+          return v;
+        }).filter(function(v){return v!=null;});
+        return vs.length?avg(vs):null;
+      }
+      var rs=DB.serie.filter(function(d){return d.mdata_id===id&&d.a===S.ano;});
+      return rs.length?avg(rs.map(function(d){return d.v;})):null;
+    });
+
+    // Mini-tabela de índices (uma linha por indicador)
+    var scopeTxt = temFiltroEv ? 'recorte ('+nDesc.toLocaleString('pt-BR')+' municípios)' : 'média nacional';
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica','bold');
+    doc.setTextColor(21,101,192);
+    doc.text('Indices compostos | '+scopeTxt+' | '+S.ano, margin, y);
+    y += 4;
+
+    // Nomes completos por id (não depender de nmC que pode truncar)
+    var nmCompleto = {
+      5:'Educação e Capacitação Profissional',
+      10:'Ciência, Tecnologia e Inovação',
+      15:'Desenvolvimento Produtivo',
+      20:'Infraestrutura',
+      25:'Desenvolvimento Social',
+      30:'Sustentabilidade',
+      35:'Fortalecimento das Capacidades Governativas',
+      62:'Objetivo 1 - Redução das Desigualdades Regionais',
+      63:'Objetivo 2 - Competitividade Regional',
+      64:'Objetivo 3 - Sustentabilidade Ambiental',
+      65:'Objetivo 4 - Coesão Territorial'
+    };
+    var nmColW = W - margin*2 - 22; // reserva 22mm para o valor
+    for(var ei=0; ei<ids2.length; ei++){
+      var rowYe = y + ei*4.5;
+      if(ei%2===0){ doc.setFillColor(245,247,252); doc.rect(margin, rowYe-3.2, W-margin*2, 4.5, 'F'); }
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(40,40,40);
+      var nmEv = nmCompleto[ids2[ei]] || nmC(ids2[ei]);
+      doc.text(nmEv, margin+2, rowYe, {maxWidth: nmColW});
+      doc.setFont('helvetica','bold');
+      doc.text(valsEv[ei]!=null?valsEv[ei].toFixed(3):'n/d', W-margin-2, rowYe, {align:'right'});
+      doc.setFont('helvetica','normal');
+    }
+    y += ids2.length*4.5 + 5;
+
+  } else if(S.view === 'municipio' || S.view === 'comparativo'){
+    var COMP_ALL2 = COMP_OBJ.concat(COMP_EIXOS);
+    var medias2 = COMP_ALL2.map(function(id){
+      var sid=String(id);
+      var vs=mfDesc.map(function(m){
+        var v=null;
+        if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoSDesc];
+        if(v==null&&S.ano===ANO_MAX) v=m.d[sid];
+        return v;
+      }).filter(function(v){return v!=null;});
+      return vs.length?avg(vs):null;
+    });
+    var melhor=null,melhorNm='',pior=null,piorNm='';
+    COMP_ALL2.forEach(function(id,i){
+      if(medias2[i]!=null&&(melhor===null||medias2[i]>melhor)){melhor=medias2[i];melhorNm=nmC(id);}
+      if(medias2[i]!=null&&(pior===null||medias2[i]<pior)){pior=medias2[i];piorNm=nmC(id);}
+    });
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica','normal');
+    doc.setTextColor(40,40,40);
+    var descMun = 'Recorte com '+nDesc.toLocaleString('pt-BR')+' municipios - '+S.ano+'.';
+    if(melhorNm) descMun += '  Maior índice médio: '+melhorNm+' ('+melhor.toFixed(3)+').';
+    if(piorNm)   descMun += '  Menor índice médio: '+piorNm+' ('+pior.toFixed(3)+').';
+    var dl = doc.splitTextToSize(descMun, W-margin*2);
+    doc.text(dl, margin, y);
+    y += dl.length*4.5+3;
+
+  } else if(S.view === 'tipologia'){
+    doc.setFontSize(8.5); doc.setFont('helvetica','normal'); doc.setTextColor(40,40,40);
+    var dlTip = doc.splitTextToSize('Distribuicao dos indices compostos por tipologia PNDR - '+S.ano+
+      ' - '+nDesc.toLocaleString('pt-BR')+' municipios.', W-margin*2);
+    doc.text(dlTip, margin, y);
+    y += dlTip.length*4.5+3;
+  }
+
+  // ── Gráficos (canvas do Chart.js) ──
+  // Mapeamento: id do canvas → título legível
+  var canvasMap = [];
+  if(S.view === 'evolucao_obj' || S.view === 'evolucao_eixo'){
+    canvasMap = [
+      {id:'cl', titulo:'Evolucao do Indice Composto - '+S.ini+'-'+S.fim},
+      {id:'cb', titulo:'Media por Macrorregiao - '+S.ano},
+      {id:'ca', titulo:'Media por Abrangencia Especial - '+S.ano}
+      // 'csub' propositalmente excluído (sub-indicadores em escala diferente)
+    ];
+  } else if(S.view === 'municipio' && munDetSel){
+    canvasMap = [
+      {id:'cmr',   titulo:'Radar dos Eixos Estrategicos - '+S.ano},
+      {id:'cmro',  titulo:'Radar dos Objetivos PNDR - '+S.ano},
+      {id:'cmhist',titulo:'Evolucao Historica dos Compostos - '+munDetSel.n}
+    ];
+  } else if(S.view === 'comparativo'){
+    canvasMap = [
+      {id:'cre', titulo:'Radar dos Eixos por Macrorregiao - '+S.ano},
+      {id:'cro', titulo:'Radar dos Objetivos PNDR - '+S.ano},
+      {id:'crk', titulo:'Ranking de Indicadores - '+S.ano}
+    ];
+  }
+
+  canvasMap.forEach(function(cm){
+    var canvas = document.getElementById(cm.id);
+    if(!canvas) return;
+    try {
+      var imgData = canvas.toDataURL('image/png');
+      if(!imgData || imgData==='data:,' || imgData.length < 1000) return;
+      var cw=canvas.width, ch=canvas.height;
+      var maxW=W-margin*2;
+      var maxH = (cm.id==='cmhist'||cm.id==='cl') ? 55 : 70;
+      var ratio=Math.min(maxW/cw, maxH/ch);
+      var iw=cw*ratio, ih=ch*ratio;
+      // Quebra de página com espaço para título + imagem
+      if(y + ih + 14 > doc.internal.pageSize.getHeight() - 15){
+        doc.addPage();
+        // rodapé na nova página
+        doc.setFontSize(7); doc.setTextColor(150);
+        doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje, W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+        y = 18;
+      }
+      // Título do gráfico
+      doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+      doc.text(cm.titulo, margin, y);
+      y += 4;
+      doc.addImage(imgData, 'PNG', margin, y, iw, ih);
+      y += ih + 7;
+    } catch(e){}
+  });
+
+  // ── Tabela de indicadores do município selecionado ──
+  if(S.view === 'municipio' && munDetSel){
+    var detMun = {};
+    var detFull2 = MDET[String(munDetSel.i)] || {};
+    for(var k in detFull2) detMun[k] = detFull2[k];
+    var serieMun2 = MDET_SERIE[String(munDetSel.i)] || {};
+    var anoStrMun = String(S.ano);
+    for(var ind2 in serieMun2){
+      var vAno2 = serieMun2[ind2][anoStrMun];
+      if(vAno2 != null) detMun[ind2] = vAno2;
+    }
+    for(var k3 in munDetSel.d){ if(munDetSel.d[k3]!=null && S.ano===ANO_MAX) detMun[k3]=munDetSel.d[k3]; }
+
+    // Usa as mesmas definições do painel (EIXOS_DEF + OBJ_DEF)
+    var EIXOS_DEF_PDF = [
+      {gnm:'Eixo I - Des.Produtivo',    id:15, subs:[{id:11,nm:'Complexidade Econ.'},{id:12,nm:'% ind. emprego formal'},{id:13,nm:'Salário médio formal'},{id:14,nm:'Escala produtiva'}]},
+      {gnm:'Eixo II - C&T e Inovação',  id:10, subs:[{id:6,nm:'MPE Biotecnologia'},{id:7,nm:'Empregos Des.Científico'},{id:8,nm:'Empregos Estab.Científico'},{id:9,nm:'Patentes/100mil'}]},
+      {gnm:'Eixo III - Educação',       id:5,  subs:[{id:1,nm:'Esgotan. escolas'},{id:2,nm:'Internet escolas'},{id:3,nm:'Formação Docente'},{id:4,nm:'IDEB'}]},
+      {gnm:'Eixo IV - Infraestrutura',  id:20, subs:[{id:16,nm:'Atend. Água (IN023)'},{id:17,nm:'Internet alta veloc.'},{id:18,nm:'Internações DRSAI'},{id:19,nm:'Desp. habitação p.c.'}]},
+      {gnm:'Eixo V - Des.Social',       id:25, subs:[{id:21,nm:'Desnutrição'},{id:22,nm:'% CadUnico'},{id:23,nm:'Distorção Idade-Série'},{id:24,nm:'Dif. Salarial Feminino'}]},
+      {gnm:'Eixo VI - Governativas',    id:35, subs:[{id:31,nm:'% dirig. sup.completo'},{id:32,nm:'% serv. sup.completo'},{id:33,nm:'Salário serv.públicos'},{id:34,nm:'Sustentab. Fiscal'}]},
+      {gnm:'Eixo VII - Meio Ambiente',  id:30, subs:[{id:26,nm:'Empregos Reciclagem'},{id:27,nm:'% Área Desmatada'},{id:28,nm:'Taxa Desmatamento'},{id:29,nm:'Emissões GEE'}]},
+      {gnm:'Objetivo 1',id:62,subs:[{id:43,nm:'Dif. Salário vs Mediana'},{id:44,nm:'Dif. IDEB vs Mediana'},{id:45,nm:'Dif. Médicos vs Mediana'}]},
+      {gnm:'Objetivo 2',id:63,subs:[{id:46,nm:'Índice Centralidade'},{id:47,nm:'Prim. Populacional'},{id:48,nm:'Prim. Econômica'}]},
+      {gnm:'Objetivo 3',id:64,subs:[{id:49,nm:'% vínculos sup.'},{id:50,nm:'Salário médio formal'},{id:51,nm:'Variação Populacional'}]},
+      {gnm:'Objetivo 4',id:65,subs:[{id:52,nm:'Espec. Agrícola'},{id:53,nm:'Espec. Mineração'},{id:54,nm:'Coef. Diversificação'}]}
+    ];
+
+    var tabMunHead = [['Eixo / Objetivo','Indicador','Valor '+S.ano]];
+    var tabMunBody = [];
+    EIXOS_DEF_PDF.forEach(function(e){
+      var vComp = detMun[String(e.id)];
+      tabMunBody.push([
+        {content: pdfSafe(e.gnm), styles:{fontStyle:'bold', fillColor:[235,241,250], textColor:[21,101,192]}},
+        {content: 'Índice composto', styles:{fontStyle:'bold', fillColor:[235,241,250]}},
+        {content: vComp!=null ? parseFloat(vComp).toFixed(3) : '-', styles:{fontStyle:'bold', halign:'center', fillColor:[235,241,250]}}
+      ]);
+      e.subs.forEach(function(s){
+        var vs = detMun[String(s.id)];
+        var vsStr = vs!=null ? (Math.abs(parseFloat(vs))<100 ? parseFloat(vs).toFixed(3) : parseFloat(vs).toFixed(1)) : '-';
+        tabMunBody.push(['', pdfSafe(s.nm), {content:vsStr, styles:{halign:'center'}}]);
+      });
+    });
+
+    doc.addPage();
+    doc.setFontSize(7); doc.setTextColor(150);
+    doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje, W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+    doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+    doc.text(pdfSafe('Indicadores do município - '+munDetSel.n+' ('+munDetSel.u+') | '+S.ano), margin, 18);
+
+    doc.autoTable({
+      startY: 22,
+      head: tabMunHead,
+      body: tabMunBody,
+      margin: {left: margin, right: margin},
+      styles: {fontSize: 7, cellPadding: 1.5},
+      headStyles: {fillColor:[21,101,192], textColor:255, fontStyle:'bold', fontSize:7},
+      columnStyles: {
+        0: {cellWidth: 55},
+        1: {cellWidth: 95},
+        2: {cellWidth: 22, halign:'center'}
+      },
+      didDrawPage: function(){
+        doc.setFontSize(7); doc.setTextColor(150);
+        doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje, W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+      }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  // ── Helper: valor de índice por município ──
+  function getValRec(m, id, anoStr){
+    var sid = String(id);
+    var v = null;
+    if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoStr];
+    if(v==null && S.ano===ANO_MAX) v=(m.d[sid]!=null?m.d[sid]:null);
+    return v!=null ? parseFloat(v).toFixed(3) : '-';
+  }
+
+  // ── Tabela de municípios do recorte ──
+  // Mostrada em evolução (sempre), municipio e comparativo (sem detalhe de município selecionado)
+  var mostraTabelaMun = !munDetSel && (
+    S.view === 'evolucao_obj' || S.view === 'evolucao_eixo' ||
+    S.view === 'municipio' || S.view === 'comparativo'
+  );
+
+  if(mostraTabelaMun){
+    var anoStr2 = String(S.ano);
+    // Nomes completos por id
+    var nmCompletoTab = {
+      5:'Educação e Cap. Prof.',
+      10:'C&T e Inovação',
+      15:'Des. Produtivo',
+      20:'Infraestrutura',
+      25:'Des. Social',
+      30:'Sustentabilidade',
+      35:'Cap. Governativas',
+      62:'Objetivo 1',
+      63:'Objetivo 2',
+      64:'Objetivo 3',
+      65:'Objetivo 4'
+    };
+    // Coluna: apenas o indicador selecionado em evolução/comparativo; todos os compostos em municipio
+    var tabIds;
+    if(S.view === 'evolucao_eixo' || S.view === 'evolucao_obj' || S.view === 'comparativo'){
+      // usa o indicador que o usuário está analisando
+      tabIds = [S.ind];
+    } else {
+      tabIds = COMP_OBJ.concat(COMP_EIXOS);
+    }
+
+    // Municípios ordenados alfabeticamente
+    var mfTab = munFilt().slice().sort(function(a,b){
+      return a.n < b.n ? -1 : a.n > b.n ? 1 : 0;
+    });
+
+    // Cabeçalho: nome do indicador (abreviado se necessário)
+    var COMP_IDS_TAB = [5,10,15,20,25,30,35,62,63,64,65];
+    function getValRecExt(m, id, anoStr){
+      // compostos: MDET_COMP / m.d
+      var sid = String(id);
+      var v = null;
+      if(COMP_IDS_TAB.indexOf(id)>=0){
+        if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoStr];
+        if(v==null && S.ano===ANO_MAX) v=(m.d[sid]!=null?m.d[sid]:null);
+      } else {
+        // sub-indicador: MDET
+        var dm = MDET[String(m.i)]||{};
+        v = dm[sid]!=null ? dm[sid] : null;
+      }
+      return v!=null ? parseFloat(v).toFixed(3) : '-';
+    }
+
+    // Cabeçalho simplificado: coluna de valor usa label curto
+    var tabHead = [['Município','UF','Tipologia'].concat(tabIds.map(function(){
+      return 'Valor';
+    }))];
+
+    var tabBody = mfTab.map(function(m){
+      return [m.n, m.u, m.tp].concat(tabIds.map(function(id){
+        return getValRecExt(m, id, anoStr2);
+      }));
+    });
+
+    // Larguras fixas: Município=48, UF=28, Tipologia=52; restante para indicadores
+    var nIdx = tabIds.length;
+    var colMun = 48, colUF = 28, colTip = 52;
+    var totalUtil = W - margin*2; // ~182mm
+    var restW = totalUtil - colMun - colUF - colTip;
+    var idxW = nIdx === 1 ? restW : Math.max(Math.floor(restW / nIdx), 14);
+
+    var colStylesT = {
+      0:{cellWidth:colMun},
+      1:{cellWidth:colUF, overflow:'linebreak'},
+      2:{cellWidth:colTip, overflow:'linebreak', fontSize:6}
+    };
+    for(var ci=0; ci<nIdx; ci++){
+      colStylesT[3+ci] = {cellWidth:idxW, halign:'center', overflow:'linebreak'};
+    }
+
+    // Sempre em nova página
+    doc.addPage();
+    doc.setFontSize(7); doc.setTextColor(150);
+    doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+      W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+
+    var labelAbaT = S.view==='evolucao_eixo' ? 'Eixos Estrategicos' :
+                    S.view==='evolucao_obj'   ? 'Objetivos PNDR' : 'Indices Compostos';
+    doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+    doc.text('Municipios do recorte | '+labelAbaT+' | '+S.ano+
+      '  ('+mfTab.length.toLocaleString('pt-BR')+' municipios, ordem alfabetica)', margin, 18);
+    // Nome completo do(s) indicador(es) como subtítulo — usa nmInd() direto, sem o truncamento de nmC()
+    var nmIndicadores = tabIds.map(function(id){
+      return pdfSafe(nmCompletoTab[id] || nmInd(id) || String(id));
+    }).join(' | ');
+    doc.setFontSize(7.5); doc.setFont('helvetica','italic'); doc.setTextColor(80,80,80);
+    var nmLines = doc.splitTextToSize('Indicador: '+nmIndicadores, W - margin*2);
+    doc.text(nmLines, margin, 23);
+
+    doc.autoTable({
+      startY: 23 + nmLines.length * 4,
+      head: tabHead,
+      body: tabBody,
+      margin: {left: margin, right: margin},
+      styles: {fontSize: 6.5, cellPadding: [1.4, 2, 1.4, 2], valign:'middle', overflow:'linebreak'},
+      headStyles: {fillColor:[21,101,192], textColor:255, fontStyle:'bold', fontSize:6.5, valign:'middle'},
+      alternateRowStyles: {fillColor:[245,247,250]},
+      columnStyles: colStylesT,
+      didDrawPage: function(){
+        doc.setFontSize(7); doc.setTextColor(150);
+        doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+          W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+      }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  // ── Tabela de médias por macrorregião (Evolução Obj/Eixo e Comparativo) ──
+  if(S.view === 'evolucao_obj' || S.view === 'evolucao_eixo' || S.view === 'comparativo'){
+    var idsRg = S.view==='evolucao_eixo' ? COMP_EIXOS : (S.view==='evolucao_obj' ? COMP_OBJ : COMP_OBJ.concat(COMP_EIXOS));
+    var nmCompletoRg = {
+      5:'Educação e Capacitação Profissional',10:'Ciência, Tecnologia e Inovação',
+      15:'Desenvolvimento Produtivo',20:'Infraestrutura',25:'Desenvolvimento Social',
+      30:'Sustentabilidade',35:'Fortalecimento das Capacidades Governativas',
+      62:'Objetivo 1 - Redução das Desigualdades',63:'Objetivo 2 - Competitividade',
+      64:'Objetivo 3 - Sustentabilidade',65:'Objetivo 4 - Coesão Territorial'
+    };
+    var rgHead = [['Indicador','Norte','Nordeste','Centro-Oeste','Sudeste','Sul','Brasil']];
+    var rgRegioes = ['Norte','Nordeste','Centro-Oeste','Sudeste','Sul'];
+    var rgBody = idsRg.map(function(id){
+      var row = [nmCompletoRg[id]||nmC(id)];
+      var allVals = [];
+      rgRegioes.forEach(function(rg){
+        var rs = DB.serie.filter(function(d){ return d.mdata_id===id && d.rg===rg && d.a===S.ano; });
+        var v = rs.length ? avg(rs.map(function(d){ return d.v; })) : null;
+        row.push(v!=null ? v.toFixed(3) : '-');
+        if(v!=null) allVals.push(v);
+      });
+      var brRs = DB.serie.filter(function(d){ return d.mdata_id===id && d.rg==='Brasil' && d.a===S.ano; });
+      var brV = brRs.length ? avg(brRs.map(function(d){ return d.v; })) : (allVals.length ? avg(allVals) : null);
+      row.push(brV!=null ? brV.toFixed(3) : '-');
+      return row;
+    });
+
+    if(doc.lastAutoTable) y = doc.lastAutoTable.finalY + 8;
+
+    doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+    doc.text('Medias por macrorregiao - '+S.ano, margin, y);
+    y += 4;
+
+    doc.autoTable({
+      startY: y,
+      head: rgHead,
+      body: rgBody,
+      margin: {left: margin, right: margin},
+      styles: {fontSize: 7.5, cellPadding: 2, halign:'center'},
+      headStyles: {fillColor:[21,101,192], textColor:255, fontStyle:'bold'},
+      columnStyles: {0:{halign:'left', cellWidth:62}},
+      alternateRowStyles: {fillColor:[245,247,250]},
+      didDrawPage: function(){
+        doc.setFontSize(7); doc.setTextColor(150);
+        doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+          W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+      }
+    });
+
+    // ── Ficha Metodológica ──
+    // Para cada eixo/objetivo exibido, mostra os sub-indicadores com descrição
+    var fichaGrupos = S.view==='evolucao_eixo'
+      ? [{gnm:'Eixo I – Desenv. Produtivo',    ids:[11,12,13,14,15]},
+         {gnm:'Eixo II – C&T e Inovação',      ids:[6,7,8,9,10]},
+         {gnm:'Eixo III – Educação',            ids:[1,2,3,4,5]},
+         {gnm:'Eixo IV – Infraestrutura',       ids:[16,17,18,19,20]},
+         {gnm:'Eixo V – Desenv. Social',        ids:[21,22,23,24,25]},
+         {gnm:'Eixo VI – Governativas',         ids:[31,32,33,34,35]},
+         {gnm:'Eixo VII – Meio Ambiente',       ids:[26,27,28,29,30]}]
+      : S.view==='evolucao_obj'
+      ? [{gnm:'Objetivo 1 – Redução das Desigualdades', ids:[43,44,45,62]},
+         {gnm:'Objetivo 2 – Cidades Intermediadoras',   ids:[46,47,48,63]},
+         {gnm:'Objetivo 3 – Competitividade',           ids:[49,50,51,64]},
+         {gnm:'Objetivo 4 – Diversificação',            ids:[52,53,54,65]}]
+      : // comparativo: todos
+        [{gnm:'Eixo I – Desenv. Produtivo',    ids:[11,12,13,14,15]},
+         {gnm:'Eixo II – C&T e Inovação',      ids:[6,7,8,9,10]},
+         {gnm:'Eixo III – Educação',            ids:[1,2,3,4,5]},
+         {gnm:'Eixo IV – Infraestrutura',       ids:[16,17,18,19,20]},
+         {gnm:'Eixo V – Desenv. Social',        ids:[21,22,23,24,25]},
+         {gnm:'Eixo VI – Governativas',         ids:[31,32,33,34,35]},
+         {gnm:'Eixo VII – Meio Ambiente',       ids:[26,27,28,29,30]},
+         {gnm:'Objetivo 1 – Redução das Desigualdades', ids:[43,44,45,62]},
+         {gnm:'Objetivo 2 – Cidades Intermediadoras',   ids:[46,47,48,63]},
+         {gnm:'Objetivo 3 – Competitividade',           ids:[49,50,51,64]},
+         {gnm:'Objetivo 4 – Diversificação',            ids:[52,53,54,65]}];
+
+    doc.addPage();
+    doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+    doc.text(pdfSafe('Ficha Metodológica'), margin, 18);
+    doc.setFontSize(7); doc.setTextColor(150);
+    doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje, W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+
+    // Reinicia referência de posição após nova página manual
+    var _fichaY = 26;
+    var _fichaOrigFn = addFicha;
+    addFicha = (function(baseY){
+      var nextY = baseY;
+      return function(ids, titulo){
+        var rows = ids.map(function(id){
+          var m = META[id];
+          if(!m) return null;
+          return [pdfSafe(m.nm), pdfSafe(m.desc)];
+        }).filter(Boolean);
+        if(!rows.length) return;
+        var curY = nextY;
+        if(curY + 20 > doc.internal.pageSize.getHeight() - 15){ doc.addPage(); curY = 18; }
+        doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+        doc.text(pdfSafe(titulo), margin, curY);
+        curY += 4;
+        doc.autoTable({
+          startY: curY,
+          head: [['Indicador','Descrição do cálculo']],
+          body: rows,
+          margin: {left: margin, right: margin},
+          styles: {fontSize: 7, cellPadding: 2},
+          headStyles: {fillColor:[21,101,192], textColor:255, fontStyle:'bold'},
+          columnStyles: {0:{cellWidth:65, fontStyle:'bold'}, 1:{cellWidth:'auto'}},
+          alternateRowStyles: {fillColor:[245,247,250]},
+          didDrawPage: function(){
+            doc.setFontSize(7); doc.setTextColor(150);
+            doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+              W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+          }
+        });
+        nextY = doc.lastAutoTable.finalY + 8;
+      };
+    })(_fichaY);
+
+    fichaGrupos.forEach(function(g){
+      addFicha(g.ids, g.gnm);
+    });
+
+    // Restaura addFicha original para uso posterior (PNAD)
+    addFicha = _fichaOrigFn;
+  }
+
+  // ── PNAD Contínua ──
+  if(S.view === 'pnad'){
+    var EIXO_NM_PDF=['','Educação e Qualif.','C&T e Inovação','Des. Produtivo','Infraestruturas','Des. Social','Governativas','Meio Ambiente'];
+    var REGIOES_PDF=['Norte','Nordeste','Centro-Oeste','Sudeste','Sul'];
+    var pnadEixos = Object.keys(PNAD).map(Number).sort(function(a,b){return a-b;});
+
+    pnadEixos.forEach(function(eixoNum, idx){
+      var p = PNAD[String(eixoNum)];
+      if(!p) return;
+      var anosAll = Object.keys(p.brasil).map(Number).sort(function(a,b){return a-b;});
+      var priAno = window._pnadAnoIni || anosAll[0];
+      var anos = anosAll.filter(function(a){return a>=priAno;});
+
+      if(idx > 0){ doc.addPage(); }
+
+      var yP = idx===0 ? y : 18;
+
+      doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(21,101,192);
+      doc.text(pdfSafe('Eixo '+eixoNum+' - '+EIXO_NM_PDF[eixoNum]+' | '+p.nm+' ('+p.un+')'), margin, yP);
+      yP += 6;
+
+      // Tabela: anos × regiões + Brasil
+      var pnadHead = [['Ano'].concat(REGIOES_PDF).concat(['Brasil'])];
+      var pnadBody = anos.map(function(a){
+        var row = [String(a)];
+        REGIOES_PDF.forEach(function(rg){
+          var v = (p.serie[rg]||{})[String(a)];
+          row.push(v!=null ? v.toFixed(1) : '-');
+        });
+        var vBr = p.brasil[String(a)];
+        row.push(vBr!=null ? vBr.toFixed(1) : '-');
+        return row;
+      });
+
+      doc.autoTable({
+        startY: yP,
+        head: pnadHead,
+        body: pnadBody,
+        margin: {left: margin, right: margin},
+        styles: {fontSize: 7.5, cellPadding: 2, halign:'center'},
+        headStyles: {fillColor:[21,101,192], textColor:255, fontStyle:'bold'},
+        columnStyles: {0:{halign:'left', cellWidth:16}},
+        alternateRowStyles: {fillColor:[245,247,250]},
+        didDrawPage: function(){
+          doc.setFontSize(7); doc.setTextColor(150);
+          doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+            W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+        }
+      });
+
+      // Ficha do indicador PNAD logo abaixo da tabela
+      var pnadKey = 'pnad'+eixoNum;
+      addFicha([pnadKey], 'Metodologia – '+pdfSafe(p.nm));
+    });
+  }
+
+  // ── Rodapé na última página ──
+  doc.setFontSize(7);
+  doc.setTextColor(150);
+  doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
+    W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
+
+  // ── Salva ──
+  var nomeArq = 'PNDR_'+S.view+'_'+S.ano+'.pdf';
+  doc.save(nomeArq);
 }
 
 function downloadCSV(filename, rows){
@@ -921,7 +1776,7 @@ function dlMunicipal(){
     );
     rows.push(linha);
   });
-  downloadCSV('PNDR_Municipal_2024.csv', rows);
+  downloadCSV('PNDR_Municipal_'+ANO_MAX+'.csv', rows);
 }
 function dlMunicipalXLSX(){
   var compostos=COMP_OBJ.concat(COMP_EIXOS);
@@ -932,7 +1787,7 @@ function dlMunicipalXLSX(){
     rows.push([m.n,m.u,m.tp,m.i].concat(
       compostos.map(function(id){var v=m.d[String(id)];return v!=null?v:null;})));
   });
-  downloadXLSX('PNDR_Municipal_2024.xlsx',rows,'Municípios');
+  downloadXLSX('PNDR_Municipal_'+ANO_MAX+'.xlsx',rows,'Municípios');
 }
 
 function dlMunicipioSelecionado(fmt){
@@ -1444,7 +2299,7 @@ function rTipologia(main){
   }).join('');
   var abNote=temAbrang()?'<span style="background:#e3edf9;color:var(--pr);border-radius:12px;padding:2px 10px;font-size:10.5px;font-weight:600;margin-left:8px">▼ Abrangência ativa</span>':'';
   main.innerHTML=
-    '<div class="tb-top"><div class="tb"><h1>Por Tipologia PNDR'+abNote+'</h1><div class="sub">2024'+(temAbrang()?' · abrangência ativa':'')+'</div></div>'+
+    '<div class="tb-top"><div class="tb"><h1>Por Tipologia PNDR'+abNote+'</h1><div class="sub">'+ANO_MAX+(temAbrang()?' · abrangência ativa':'')+'</div></div>'+
     btnDL('Dados','dlTipologia()','dlTipologiaXLSX()')+
     '</div>'+
     '<div class="card" style="padding:12px 16px 8px"><div class="desc" style="margin-bottom:6px">Selecione o indicador</div>'+
@@ -1500,19 +2355,31 @@ function rMunicipio(main){
 function _renderMunicipio(main){
   var mSel=S.munSel?MUNS.find(function(m){return m.i===S.munSel;}):null;
   if(!mSel){
+    var anoTabStr=String(S.ano);
+    function getCompVal(m,sid){
+      // usa MDET_COMP se carregado (suporta qualquer ano), fallback para m.d (ANO_MAX)
+      if(Object.keys(MDET_COMP).length>0){
+        var v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoTabStr];
+        if(v!=null) return v;
+      }
+      // fallback: m.d só tem ANO_MAX
+      if(S.ano===ANO_MAX) return m.d[sid];
+      return null;
+    }
     var tabRows=munFilt().filter(function(m){return !S.munBusca||m.n.toLowerCase().indexOf(S.munBusca)>=0;}).slice(0,40).map(function(m){
+      var v62=getCompVal(m,'62'),v63=getCompVal(m,'63'),v5=getCompVal(m,'5'),v25=getCompVal(m,'25'),v20=getCompVal(m,'20');
       return '<tr style="cursor:pointer" onclick="S.munSel='+m.i+';renderML();render()"><td><b>'+m.n+'</b></td><td>'+m.u+'</td><td style="font-size:10.5px">'+m.tp+'</td>'
-        +'<td>'+(m.d['62']!=null?m.d['62'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['63']!=null?m.d['63'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['5']!=null?m.d['5'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['25']!=null?m.d['25'].toFixed(3):'-')+'</td>'
-        +'<td>'+(m.d['20']!=null?m.d['20'].toFixed(3):'-')+'</td></tr>';
+        +'<td>'+(v62!=null?v62.toFixed(3):'-')+'</td>'
+        +'<td>'+(v63!=null?v63.toFixed(3):'-')+'</td>'
+        +'<td>'+(v5!=null?v5.toFixed(3):'-')+'</td>'
+        +'<td>'+(v25!=null?v25.toFixed(3):'-')+'</td>'
+        +'<td>'+(v20!=null?v20.toFixed(3):'-')+'</td></tr>';
     }).join('');
     main.innerHTML=
       '<div class="tb-top"><div class="tb"><h1>Análise Municipal</h1>'
-      +'<div class="sub">Índices compostos · 2024 · '+MUNS.length+' municípios</div></div>'
+      +'<div class="sub">Índices compostos · '+S.ano+' · '+MUNS.length+' municípios</div></div>'
       +btnDL('Dados','dlMunicipal()','dlMunicipalXLSX()')+'</div>'
-      +'<div class="card"><h2>Municípios no recorte · compostos 2024</h2>'
+      +'<div class="card"><h2>Municípios no recorte · compostos '+S.ano+'</h2>'
       +'<div class="desc">Clique numa linha para ver o detalhe</div>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Município</th><th>UF</th><th>Tipologia</th>'
       +'<th>Obj.1</th><th>Obj.2</th><th>Educação</th><th>Des.Social</th><th>Infraestrutura</th></tr></thead>'
@@ -1601,6 +2468,12 @@ function _renderMunicipio(main){
       btn.onclick=(function(f){return function(){dlMunicipioSelecionado(f.toLowerCase());};})(fmt);
       wrap.appendChild(btn);
     });
+    var btnPDF=document.createElement('button');
+    btnPDF.className='btn-dl';
+    btnPDF.style.cssText='background:#c62828;border-color:#c62828;color:#fff';
+    btnPDF.textContent='⬇ PDF';
+    btnPDF.onclick=function(){gerarPDF();};
+    wrap.appendChild(btnPDF);
     hdr.appendChild(wrap);
   })();
 
@@ -1655,9 +2528,16 @@ function rComparativo(main){
   var nmsE=COMP_EIXOS.map(function(id){return nmC(id);});
   var nmsO=COMP_OBJ.map(function(id){return nmC(id);});
   var temFiltro=temAbrang()||S.rg!=='all'||S.uf!=='all'||S.tip!=='all';
+  var anoComp=S.ano; // usa o ano de análise selecionado
+  var anoCompStr=String(anoComp);
   function valMuns(id,munsArr){
     var sid=String(id);
-    var vals=munsArr.filter(function(m){return m.d[sid]!=null;}).map(function(m){return m.d[sid];});
+    var vals=munsArr.map(function(m){
+      var v=null;
+      if(Object.keys(MDET_COMP).length>0) v=((MDET_COMP[String(m.i)]||{})[sid]||{})[anoCompStr];
+      if(v==null&&anoComp===ANO_MAX) v=m.d[sid];
+      return v;
+    }).filter(function(v){return v!=null;});
     return vals.length?parseFloat((vals.reduce(function(s,v){return s+v;},0)/vals.length).toFixed(4)):null;
   }
   function dsRg(ids){
@@ -1668,21 +2548,21 @@ function rComparativo(main){
         return {label:rg,data:ids.map(function(id){return valMuns(id,mf);}),borderColor:COR[rg]||'#1B4FA8',backgroundColor:(COR[rg]||'#1B4FA8')+'15',borderWidth:2,pointRadius:3};
       });
     }
-    return REGIOES.map(function(rg){return {label:rg,data:ids.map(function(id){var r=DB.serie.find(function(d){return d.mdata_id===id&&d.rg===rg&&d.a===S.fim;});return r?r.v:null;}),borderColor:COR[rg],backgroundColor:COR[rg]+'15',borderWidth:2,pointRadius:3};});
+    return REGIOES.map(function(rg){return {label:rg,data:ids.map(function(id){var r=DB.serie.find(function(d){return d.mdata_id===id&&d.rg===rg&&d.a===anoComp;});return r?r.v:null;}),borderColor:COR[rg],backgroundColor:COR[rg]+'15',borderWidth:2,pointRadius:3};});
   }
   function rkData(){
     var allC=COMP_EIXOS.concat(COMP_OBJ);
     if(temFiltro){var mf=munFilt();return allC.map(function(id){return {nm:nmC(id),avg:valMuns(id,mf)};}).filter(function(d){return d.avg!=null;}).sort(function(a,b){return b.avg-a.avg;});}
-    return allC.map(function(id){var rs=DB.serie.filter(function(d){return d.mdata_id===id&&d.a===S.fim;});return {nm:nmC(id),avg:rs.length?avg(rs.map(function(d){return d.v;})):null};}).filter(function(d){return d.avg!=null;}).sort(function(a,b){return b.avg-a.avg;});
+    return allC.map(function(id){var rs=DB.serie.filter(function(d){return d.mdata_id===id&&d.a===anoComp;});return {nm:nmC(id),avg:rs.length?avg(rs.map(function(d){return d.v;})):null};}).filter(function(d){return d.avg!=null;}).sort(function(a,b){return b.avg-a.avg;});
   }
   var abNote=temFiltro?'<span style="background:#e3edf9;color:var(--pr);border-radius:12px;padding:2px 10px;font-size:10.5px;font-weight:600;margin-left:8px">▼ Filtros ativos</span>':'';
   main.innerHTML=
-    '<div class="tb-top"><div class="tb"><h1>Comparativo Geral'+abNote+'</h1><div class="sub">Todos os índices compostos · '+S.fim+'</div></div>'+
+    '<div class="tb-top"><div class="tb"><h1>Comparativo Geral'+abNote+'</h1><div class="sub">Todos os índices compostos · '+anoComp+'</div></div>'+
 btnDL('Dados','dlComparativo()','dlComparativoXLSX()')+
 '</div>'+
-    '<div class="card"><h2>Radar - Eixos por Região</h2><div class="desc">7 eixos · '+S.fim+'</div><div style="height:340px"><canvas id="cre"></canvas></div></div>'+
-    '<div class="g2"><div class="card"><h2>Radar - Objetivos</h2><div class="desc">4 Objetivos · '+S.fim+'</div><div style="height:260px"><canvas id="cro"></canvas></div></div>'+
-    '<div class="card"><h2>Ranking</h2><div class="desc">Média '+(temFiltro?'do recorte':'nacional')+' · '+S.fim+'</div><div style="height:260px"><canvas id="crk"></canvas></div></div></div>';
+    '<div class="card"><h2>Radar - Eixos por Região</h2><div class="desc">7 eixos · '+anoComp+'</div><div style="height:340px"><canvas id="cre"></canvas></div></div>'+
+    '<div class="g2"><div class="card"><h2>Radar - Objetivos</h2><div class="desc">4 Objetivos · '+anoComp+'</div><div style="height:260px"><canvas id="cro"></canvas></div></div>'+
+    '<div class="card"><h2>Ranking</h2><div class="desc">Média '+(temFiltro?'do recorte':'nacional')+' · '+anoComp+'</div><div style="height:260px"><canvas id="crk"></canvas></div></div></div>';
   var rOpts=function(p){return {responsive:true,maintainAspectRatio:false,plugins:{legend:{position:p,labels:{font:{size:10},boxWidth:8}}},scales:{r:{min:0,max:1,pointLabels:{font:{size:9}},ticks:{stepSize:0.2,font:{size:8}}}}};};
   dc('cre');charts['cre']=new Chart(document.getElementById('cre'),{type:'radar',data:{labels:nmsE,datasets:dsRg(COMP_EIXOS)},options:rOpts('right')});
   dc('cro');charts['cro']=new Chart(document.getElementById('cro'),{type:'radar',data:{labels:nmsO,datasets:dsRg(COMP_OBJ)},options:rOpts('bottom')});
