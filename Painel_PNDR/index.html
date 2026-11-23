@@ -819,7 +819,18 @@ function downloadXLSX(filename, rows, sheetName){
   }
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName||'Dados');
-  XLSX.writeFile(wb, filename);
+  // Usa blob + window.open para funcionar dentro de iframe
+  try {
+    var wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+    var xlsBlob = new Blob([wbout], {type:'application/octet-stream'});
+    var xlsUrl = URL.createObjectURL(xlsBlob);
+    var ax = document.createElement('a');
+    ax.href=xlsUrl; ax.download=filename;
+    document.body.appendChild(ax); ax.click(); document.body.removeChild(ax);
+    setTimeout(function(){URL.revokeObjectURL(xlsUrl);}, 5000);
+  } catch(e) {
+    XLSX.writeFile(wb, filename);
+  }
 }
 
 function btnDL(label, fnCSV, fnXLSX){
@@ -1675,9 +1686,18 @@ function gerarPDF(){
   doc.text('Painel PNDR | SDR/DGINF/MIDR | '+dataHoje,
     W/2, doc.internal.pageSize.getHeight()-6, {align:'center'});
 
-  // ── Salva ──
+  // ── Salva — usa window.open para funcionar dentro de iframe ──
   var nomeArq = 'PNDR_'+S.view+'_'+S.ano+'.pdf';
-  doc.save(nomeArq);
+  try {
+    var pdfBlob = doc.output('blob');
+    var pdfUrl = URL.createObjectURL(pdfBlob);
+    var ap = document.createElement('a');
+    ap.href=pdfUrl; ap.download=nomeArq;
+    document.body.appendChild(ap); ap.click(); document.body.removeChild(ap);
+    setTimeout(function(){URL.revokeObjectURL(pdfUrl);}, 5000);
+  } catch(e) {
+    window.open(doc.output('bloburl'), '_blank');
+  }
 }
 
 function downloadCSV(filename, rows){
@@ -1690,12 +1710,18 @@ function downloadCSV(filename, rows){
       return s;
     }).join(',');
   }).join('\n');
-  var bom = '\uFEFF'; 
+  var bom = '\uFEFF';
   var blob = new Blob([bom+csv], {type:'text/csv;charset=utf-8;'});
   var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href=url; a.download=filename; a.click();
-  setTimeout(function(){URL.revokeObjectURL(url);}, 1000);
+  // Tenta download direto; se estiver em iframe usa window.open (contorna bloqueio de sandbox)
+  try {
+    var a = document.createElement('a');
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  } catch(e) {
+    window.open(url, '_blank');
+  }
+  setTimeout(function(){URL.revokeObjectURL(url);}, 5000);
 }
 
 
